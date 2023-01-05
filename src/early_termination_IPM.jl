@@ -1,5 +1,4 @@
-using SparseArrays, LinearAlgebra, Random, StatsBase
-using NPZ
+using SparseArrays, LinearAlgebra
 T = Float64
 #include("direct_Clarabel_large_augmented.jl")
 """
@@ -26,7 +25,7 @@ s.t.	Px + q + A'y + y_u - y_l == 0
 - best_ub: current best upper bound on objective value stored in root node
 - node: current node, needs to be implemented with Clarabel solver
 """
-function early_termination(solver, iteration::Int)
+function early_termination(solver, iteration::Int, best_ub)
     # check κ/τ before normalization
     ktratio = solver.info.ktratio
     if ktratio <= 1e-2 # if ktratio <= 1e-2, then problem is feasible 
@@ -36,13 +35,14 @@ function early_termination(solver, iteration::Int)
         dual_cost = compute_dual_cost(data, variables) #compute current dual cost
         println("Found dual cost: ", dual_cost)
 
-        if (dual_cost > solver.info.best_ub)
-            println("early_termination has found dual_cost larger than best ub")
+        if (dual_cost > best_ub)
+            printstyled("early_termination has found dual_cost larger than best ub \n", color = :red)
             solver.info.status = Clarabel.EARLY_TERMINATION
+            # TOASK or: solver.solution.status =  Clarabel.EARLY_TERMINATION
             # model.early_num += 1 TODO at the end for performance plotting
             return true
         end
-    end
+    end 
     
     return false
 end
@@ -58,8 +58,6 @@ function compute_dual_cost(data, variables)
     τinv = inv(variables.τ)
     x = variables.x * τinv # normalize by τ
     y = variables.z*τinv #include sign difference with Clarabel where z >= 0 but y_l and y_u are nonpositive
-    println(" x :", x)
-    println(" y : ",y)
     # correction by yminus and yplus (Method 2, auxiliary optimization)
     # yplus corresponds to s_(+) or lower bounds, yminus to s_(-) or upper bounds
     yplus = y[end-2*m+1:end-m] # last 2m rows of cones are the lower and upper bounds updated at eac h branching
@@ -69,8 +67,6 @@ function compute_dual_cost(data, variables)
     A0 = data.A[1:end-4*m, :] 
     b0 = data.b[1:end-4*m]
     y0 = y[1:end-4*m]
-    println("A0 is ", A0)
-    println("b0 is ", b0)
 
     Δx = zeros(length(x))
 
@@ -100,7 +96,7 @@ function test_MIQP()
 
     Clarabel.setup!(solver, P, q, Ā, b̄, s̄, settings)
     
-    result = Clarabel.solve!(solver)
+    result = Clarabel.solve!(solver,Inf)
     # dual objective after correction
     dual_cost = compute_dual_cost(solver.data, solver.variables, m)
     # check with dual objective obtained from Clarabel when no early termination

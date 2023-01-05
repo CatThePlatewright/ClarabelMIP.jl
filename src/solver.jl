@@ -2,7 +2,7 @@
 # utility constructor that includes
 # both object creation and setup
 #--------------------------------------
-
+include("early_termination_IPM.jl")
 function Solver(
     P::AbstractMatrix{T},
     c::Vector{T},
@@ -159,7 +159,7 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}
+    s::Solver{T}, best_ub::T = Inf
 ) where{T}
 
     # initialization needed for first loop pass 
@@ -318,7 +318,13 @@ function solve!(
             info_save_prev_iterate(s.info,s.variables,s.prev_vars)
 
             variables_add_step!(s.variables,s.step_lhs,α)
-            # TODO: early_termination(s, iter) with best_ub as Clarabel data field or argument in solve!()
+
+            # only do early_termination() if feasible upper bound available
+            if ~isinf(best_ub)
+                if early_termination(s,iter, best_ub)
+                    break
+                end
+            end
             
 
         end  #end while
@@ -329,10 +335,11 @@ function solve!(
 
     end #end solve! timer
 
-    # TODO: skip post-processing steps here
-    #= if s.info.status == EARLY_TERMINATION
-        return 
-    end =#
+    # skip post-processing steps if early_termination 
+    if s.info.status == EARLY_TERMINATION
+        printstyled("early_termination has found dual_cost larger than best ub \n", color = :red)
+        return Nothing()
+    end
     # Check we if actually took a final step.  If not, we need 
     # to recapture the scalars and print one last line 
     if(α == zero(T))
