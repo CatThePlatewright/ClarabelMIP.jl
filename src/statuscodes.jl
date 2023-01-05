@@ -20,6 +20,7 @@ Otherwise:
 * `MAX_TIME`                    : Time limit reached before solution or infeasibility certificate found.
 * `NUMERICAL_ERROR`             : Solver terminated with a numerical error.
 * `INSUFFICIENT_PROGRESS`       : Solver terminated due to lack of progress.
+* 'EARLY_TERMINATION'           : Solver terminated before solving to optimality due to lower bound > current best upper bound.
 """
 @enum SolverStatus begin
     UNSOLVED           = 0
@@ -33,6 +34,7 @@ Otherwise:
     MAX_TIME
     NUMERICAL_ERROR
     INSUFFICIENT_PROGRESS
+    EARLY_TERMINATION
 end
 
 const SolverStatusDict = Dict(
@@ -46,9 +48,10 @@ const SolverStatusDict = Dict(
     MAX_ITERATIONS      =>  "iteration limit",
     MAX_TIME            =>  "time limit",
     NUMERICAL_ERROR     =>  "numerical error",
-    INSUFFICIENT_PROGRESS =>  "insufficient progress"
-)
+    INSUFFICIENT_PROGRESS =>  "insufficient progress",
+    EARLY_TERMINATION   => "early_termination"
 
+)
 function status_is_infeasible(status::SolverStatus)
     #status is any of the infeasible codes 
     return (

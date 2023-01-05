@@ -223,6 +223,7 @@ mutable struct DefaultInfo{T} <: AbstractInfo{T}
 
     solve_time::Float64
     status::SolverStatus
+    #best_ub::T  # NEW: store global best upper bound (initialised to Inf or floatmax(T)) on optimal objective p* as a field inside solver.info to use during early_termination() check
 
     function DefaultInfo{T}() where {T}
 

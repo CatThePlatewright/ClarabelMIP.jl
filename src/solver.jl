@@ -2,6 +2,7 @@
 # utility constructor that includes
 # both object creation and setup
 #--------------------------------------
+
 function Solver(
     P::AbstractMatrix{T},
     c::Vector{T},
@@ -317,6 +318,8 @@ function solve!(
             info_save_prev_iterate(s.info,s.variables,s.prev_vars)
 
             variables_add_step!(s.variables,s.step_lhs,α)
+            # TODO: early_termination(s, iter) with best_ub as Clarabel data field or argument in solve!()
+            
 
         end  #end while
         #----------
@@ -326,6 +329,10 @@ function solve!(
 
     end #end solve! timer
 
+    # TODO: skip post-processing steps here
+    #= if s.info.status == EARLY_TERMINATION
+        return 
+    end =#
     # Check we if actually took a final step.  If not, we need 
     # to recapture the scalars and print one last line 
     if(α == zero(T))
@@ -347,7 +354,7 @@ function solver_default_start!(s::Solver{T}) where {T}
     # If there are only symmetric cones, use CVXOPT style initilization
     # Otherwise, initialize along central rays
 
-    if (is_symmetric(s.cones))
+#=     if (is_symmetric(s.cones))
         #set all scalings to identity (or zero for the zero cone)
         set_identity_scaling!(s.cones)
         #Refactor
@@ -360,7 +367,8 @@ function solver_default_start!(s::Solver{T}) where {T}
     else
         #Assigns unit (z,s) and zeros the primal variables 
         variables_unit_initialization!(s.variables, s.cones)
-    end
+    end =#
+    variables_unit_initialization!(s.variables, s.cones)
 
     return nothing
 end
