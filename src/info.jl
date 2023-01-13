@@ -296,6 +296,8 @@ function _is_primal_infeasible(info, residuals, tol_infeas_abs, tol_infeas_rel)
 
     if (residuals.dot_bz < -tol_infeas_abs) &&
         (info.res_primal_inf < -tol_infeas_rel * residuals.dot_bz)
+        printstyled("(residuals.dot_bz ",residuals.dot_bz," smaller than ", -tol_infeas_abs, " primal_inf ", info.res_primal_inf, " smaller than ",
+        -tol_infeas_rel * residuals.dot_bz, color = :red )
         return true
     else
         return false

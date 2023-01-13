@@ -159,7 +159,7 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}, best_ub::T = Inf
+    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true
 ) where{T}
 
     # initialization needed for first loop pass 
@@ -215,6 +215,12 @@ function solve!(
                 s.residuals,s.settings,s.timers
             )
             @notimeit info_print_status(s.info,s.settings)
+            # only do early_termination() if feasible upper bound available
+            if ~isinf(best_ub) && early_term_enable
+                if early_termination(s,iter, best_ub)
+                    break
+                end
+            end
             isdone = info_check_termination!(s.info,s.residuals,s.settings,iter)
 
             # check for termination due to slow progress and update strategy
@@ -319,12 +325,7 @@ function solve!(
 
             variables_add_step!(s.variables,s.step_lhs,α)
 
-            # only do early_termination() if feasible upper bound available
-            if ~isinf(best_ub)
-                if early_termination(s,iter, best_ub)
-                    break
-                end
-            end
+            
             
 
         end  #end while
@@ -334,7 +335,6 @@ function solve!(
         end #end IP iteration timer
 
     end #end solve! timer
-
     # skip post-processing steps if early_termination 
     if s.info.status == EARLY_TERMINATION
         printstyled("early_termination has found dual_cost larger than best ub \n", color = :red)

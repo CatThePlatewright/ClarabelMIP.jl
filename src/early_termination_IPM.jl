@@ -32,14 +32,13 @@ function early_termination(solver, iteration::Int, best_ub)
          # TODO: store iteration number for each node, then sum it up at the end to count how many iterations compared to no-early-term algorithm
         data = solver.data
         variables = solver.variables
-        dual_cost = compute_dual_cost(data, variables) #compute current dual cost
+        dual_cost = compute_dual_cost(data, variables,solver.residuals,solver.info) #compute current dual cost
         println("Found dual cost: ", dual_cost)
 
         if (dual_cost > best_ub)
             printstyled("early_termination has found dual_cost larger than best ub \n", color = :red)
             solver.info.status = Clarabel.EARLY_TERMINATION
             # TOASK or: solver.solution.status =  Clarabel.EARLY_TERMINATION
-            # model.early_num += 1 TODO at the end for performance plotting
             return true
         end
     end 
@@ -53,34 +52,42 @@ Dual cost computation for early termination
 #new framework for dual cost computation, 
 # We can use qdldl.jl for optimization (17) later on.
 
-function compute_dual_cost(data, variables) 
+function compute_dual_cost(data, variables,residuals,info) 
+    # info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2)/cscale
+    # this is (-data.b'*variables.z*τinv -0.5*xPx*τinv^2) / data.equilibration.c[]
+
     m = data.n # assuming all-integer variables
     τinv = inv(variables.τ)
     x = variables.x * τinv # normalize by τ
     y = variables.z*τinv #include sign difference with Clarabel where z >= 0 but y_l and y_u are nonpositive
     # correction by yminus and yplus (Method 2, auxiliary optimization)
     # yplus corresponds to s_(+) or lower bounds, yminus to s_(-) or upper bounds
-    yplus = y[end-2*m+1:end-m] # last 2m rows of cones are the lower and upper bounds updated at eac h branching
-    yminus = y[end-m+1:end]
-    l = data.b[end-2*m+1:end-m]
+    yminus = y[end-2*m+1:end-m] # last 2m rows of cones are the lower and upper bounds updated at each branching
+    yplus = y[end-m+1:end]
+    neg_l = data.b[end-2*m+1:end-m]
     u = data.b[end-m+1:end]
-    A0 = data.A[1:end-4*m, :] 
-    b0 = data.b[1:end-4*m]
-    y0 = y[1:end-4*m]
+    A0 = data.A[1:end-2*m, :] 
+    b0 = data.b[1:end-2*m]
+    y0 = y[1:end-2*m] 
 
     Δx = zeros(length(x))
 
     # value of residual before the correction
     residual = data.P*x + data.q + A0'*y0 + yplus - yminus
-    
     #dual correction, only for Δy = Δyplus - Δyminus
     Δy = -residual 
     Δyplus = max(zeros(length(Δy)),Δy) 
     #mul!(Δx, op.P, coef*Δy) 
     cor_x = x + Δx # for simplicity, no correction for x
 
-    #compute support function value S_{C}(y) of a box constraint 
-    dual_cost = -0.5*cor_x'*data.P*cor_x - b0'*y0 - yplus'*u + yminus'*l + (Δyplus')*(l-u) - Δy'*l
+    println("residuals ", norm(residuals.rx*τinv- residual,Inf))
+    dual_cost = -0.5*cor_x'*data.P*cor_x - b0'*y0 - u'*yplus - neg_l'*yminus + (-neg_l-u)'*(Δyplus) + neg_l'*Δy
+    diff =  norm(dual_cost - info.cost_dual, Inf)
+    if diff > 1e-6
+        printstyled("different dual cost ", dual_cost, " ", info.cost_dual, "\n",color = :red)
+    end
+    
+
     return dual_cost
 end
 
@@ -98,10 +105,11 @@ function test_MIQP()
     
     result = Clarabel.solve!(solver,Inf)
     # dual objective after correction
-    dual_cost = compute_dual_cost(solver.data, solver.variables, m)
+    dual_cost = compute_dual_cost(solver.data, solver.variables)
     # check with dual objective obtained from Clarabel when no early termination
     println("I found dual cost : ", dual_cost)
     println(" Clarabel info cost_dual ", solver.info.cost_dual)
+    
 end
 """
 Penalized correction (ADMM paper)
@@ -119,6 +127,5 @@ function dual_correction!(data, Δx, Δy, residual)
     IterativeSolvers.cg!(Δy, mat, -residual) # this solves (P^2*coef+I)*Δy = -r (eq.18)
     mul!(Δx, op.P, coef*Δy)
 end
-
 
 
