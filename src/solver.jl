@@ -159,7 +159,7 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true
+    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, debug_print::Bool=false,  λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing
 ) where{T}
 
     # initialization needed for first loop pass 
@@ -181,8 +181,13 @@ function solve!(
     @timeit s.timers "solve!" begin
 
         # initialize variables to some reasonable starting point
-        @timeit s.timers "default start" solver_default_start!(s)
-
+        @timeit s.timers "default start" solver_default_start!(s, warm_start,λ, prev_x, prev_z, prev_s)
+        if debug_print
+            println("Solver variables: ")
+            println("x: ", s.variables.x)
+            println("z: ", s.variables.z)
+            println("s: ", s.variables.s)
+        end
         @timeit s.timers "IP iteration" begin
 
         # ----------
@@ -217,8 +222,15 @@ function solve!(
             @notimeit info_print_status(s.info,s.settings)
             # only do early_termination() if feasible upper bound available
             if ~isinf(best_ub) && early_term_enable
-                if early_termination(s,iter, best_ub)
+                # save current iteration number as the number needed until first feasible solution found
+                if s.info.cost_dual > best_ub
+                    printstyled("info_cost_dual already larger than best ub \n", color = :red)
+                    s.info.status = EARLY_TERMINATION 
                     break
+                else
+                    if early_termination(s, best_ub, debug_print)
+                        break
+                    end
                 end
             end
             isdone = info_check_termination!(s.info,s.residuals,s.settings,iter)
@@ -337,7 +349,6 @@ function solve!(
     end #end solve! timer
     # skip post-processing steps if early_termination 
     if s.info.status == EARLY_TERMINATION
-        printstyled("early_termination has found dual_cost larger than best ub \n", color = :red)
         return Nothing()
     end
     # Check we if actually took a final step.  If not, we need 
@@ -356,7 +367,7 @@ function solve!(
 end
 
 
-function solver_default_start!(s::Solver{T}) where {T}
+function solver_default_start!(s::Solver{T}, warm_start::Bool,λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing) where {T}
 
     # If there are only symmetric cones, use CVXOPT style initilization
     # Otherwise, initialize along central rays
@@ -377,9 +388,55 @@ function solver_default_start!(s::Solver{T}) where {T}
     end =#
     variables_unit_initialization!(s.variables, s.cones)
 
+    if warm_start
+        x0,s0,z0,cones0 = get_warm_start_vars(λ, s.variables, s.cones,prev_x, prev_z, prev_s)
+        if check_warm_start_conditions(s.data,s.variables, s.cones, x0,s0,z0,cones0)
+            printstyled("warm starting variables...\n", color = :green)
+            error("stop")
+            variables_warm_start!(variables,x0,s0,z0)
+        end
+    end
     return nothing
 end
 
+function check_warm_start_conditions(data::DefaultProblemData{T},variables::DefaultVariables{T}, cones::CompositeCone{T}, x0,s0,z0, cones0::CompositeCone{T})
+    
+    rp_C = -data.A'* variables.z - Symmetric(data.P)*variables.x - data.q * variables.τ
+    rp0 = -data.A'* z0 - Symmetric(data.P)*x0 - data.q 
+    rd0 = data.A * x0 + s0 - data.b 
+    rd_C = data.A * variables.x + variables.s - data.b * variables.τ
+    mu0 = (dot(s0,z0) + one(T))/(cones0.degree +1)
+    mu_C = (dot(variables.s,variables.z) + one(T))/(cones.degree +1)
+
+    return (norm(rd0) < norm(rd_C)) && (norm(rp0) < norm(rp_C)) && (mu0 < mu_C)
+end
+
+function get_warm_start_vars(λ, variables::DefaultVariables{T}, cones::CompositeCone{T},prev_x, prev_z, prev_s)
+    cones0 = deepcopy(cones)
+    z0 = zeros(length(variables.z))
+    s0 = zeros(length(variables.s))
+    x0 = zeros(length(variables.x))
+
+    x0 .= λ* prev_x
+    s0 .= λ* prev_s + (1-λ)*variables.s #note that variables.s etc have already been unit-initialised to C cold start point
+    for i in 1:lastindex(variables.z)
+        if variables.z[i] == zero(T)
+            z0[i] =variables.z[i]
+        else 
+            z0[i] = λ* prev_z[i] + (1-λ)*variables.z[i]
+        end
+    end
+    return x0,s0,z0,cones0
+end
+
+function variables_warm_start!(variables::DefaultVariables{T}, x0,s0,z0)
+ # this is the (Wpd) warm start point in Skajaa's paper (eq 9)
+    variables.x .= x0
+    variables.s .= s0
+    variables.z .= z0
+    variables.τ = one(T)
+    variables.κ = one(T) #variables.y'*variables.s./length(variables.x)
+end
 
 function solver_get_step_length(s::Solver{T},steptype::Symbol,scaling::ScalingStrategy) where{T}
 

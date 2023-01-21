@@ -25,16 +25,16 @@ s.t.	Px + q + A'y + y_u - y_l == 0
 - best_ub: current best upper bound on objective value stored in root node
 - node: current node, needs to be implemented with Clarabel solver
 """
-function early_termination(solver, iteration::Int, best_ub)
+function early_termination(solver, best_ub,debug_print=false)
     # check κ/τ before normalization
     ktratio = solver.info.ktratio
     if ktratio <= 1e-2 # if ktratio <= 1e-2, then problem is feasible 
-         # TODO: store iteration number for each node, then sum it up at the end to count how many iterations compared to no-early-term algorithm
         data = solver.data
         variables = solver.variables
-        dual_cost = compute_dual_cost(data, variables,solver.residuals,solver.info) #compute current dual cost
-        println("Found dual cost: ", dual_cost)
-
+        dual_cost = compute_dual_cost(data, variables,solver.residuals,solver.info,debug_print) #compute current dual cost
+        if debug_print
+            println("Found dual cost: ", dual_cost)
+        end
         if (dual_cost > best_ub)
             printstyled("early_termination has found dual_cost larger than best ub \n", color = :red)
             solver.info.status = Clarabel.EARLY_TERMINATION
@@ -52,7 +52,7 @@ Dual cost computation for early termination
 #new framework for dual cost computation, 
 # We can use qdldl.jl for optimization (17) later on.
 
-function compute_dual_cost(data, variables,residuals,info) 
+function compute_dual_cost(data, variables,residuals,info, debug_print=false) 
     # info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2)/cscale
     # this is (-data.b'*variables.z*τinv -0.5*xPx*τinv^2) / data.equilibration.c[]
 
@@ -64,7 +64,7 @@ function compute_dual_cost(data, variables,residuals,info)
     # yplus corresponds to s_(+) or lower bounds, yminus to s_(-) or upper bounds
     yminus = y[end-2*m+1:end-m] # last 2m rows of cones are the lower and upper bounds updated at each branching
     yplus = y[end-m+1:end]
-    neg_l = data.b[end-2*m+1:end-m]
+    neg_l = data.b[end-2*m+1:end-m] #careful of sign! "-l" in paper is the data we extract from b already!
     u = data.b[end-m+1:end]
     A0 = data.A[1:end-2*m, :] 
     b0 = data.b[1:end-2*m]
@@ -73,17 +73,20 @@ function compute_dual_cost(data, variables,residuals,info)
     Δx = zeros(length(x))
 
     # value of residual before the correction
-    residual = data.P*x + data.q + A0'*y0 + yplus - yminus
+    residual = Symmetric(data.P)*x + data.q + A0'*y0 + yplus - yminus
+
     #dual correction, only for Δy = Δyplus - Δyminus
     Δy = -residual 
     Δyplus = max(zeros(length(Δy)),Δy) 
     #mul!(Δx, op.P, coef*Δy) 
     cor_x = x + Δx # for simplicity, no correction for x
 
-    println("residuals ", norm(residuals.rx*τinv- residual,Inf))
-    dual_cost = -0.5*cor_x'*data.P*cor_x - b0'*y0 - u'*yplus - neg_l'*yminus + (-neg_l-u)'*(Δyplus) + neg_l'*Δy
+    if debug_print
+        println("residuals ", norm(residuals.rx*τinv- residual,Inf))
+    end
+    dual_cost = -0.5*cor_x'*Symmetric(data.P)*cor_x - b0'*y0 - u'*yplus - neg_l'*yminus + (-neg_l-u)'*(Δyplus) + neg_l'*Δy
     diff =  norm(dual_cost - info.cost_dual, Inf)
-    if diff > 1e-6
+    if diff > 1e-6 && debug_print
         printstyled("different dual cost ", dual_cost, " ", info.cost_dual, "\n",color = :red)
     end
     
@@ -91,26 +94,7 @@ function compute_dual_cost(data, variables,residuals,info)
     return dual_cost
 end
 
-function test_MIQP()
-    n = 2
-    m = 2
-    k = 3
-    P,q,A,b, cones, integer_vars= getData(n,m,k)
-    
-    Ā,b̄, s̄= getAugmentedData(A,b,cones,integer_vars,n)
-    settings = Clarabel.Settings(verbose = true, equilibrate_enable = false, max_iter = 100)
-    solver   = Clarabel.Solver()
 
-    Clarabel.setup!(solver, P, q, Ā, b̄, s̄, settings)
-    
-    result = Clarabel.solve!(solver,Inf)
-    # dual objective after correction
-    dual_cost = compute_dual_cost(solver.data, solver.variables)
-    # check with dual objective obtained from Clarabel when no early termination
-    println("I found dual cost : ", dual_cost)
-    println(" Clarabel info cost_dual ", solver.info.cost_dual)
-    
-end
 """
 Penalized correction (ADMM paper)
 
