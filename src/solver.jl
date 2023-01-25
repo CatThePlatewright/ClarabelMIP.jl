@@ -182,12 +182,6 @@ function solve!(
 
         # initialize variables to some reasonable starting point
         @timeit s.timers "default start" solver_default_start!(s, warm_start,λ, prev_x, prev_z, prev_s)
-        if debug_print
-            println("Solver variables: ")
-            println("x: ", s.variables.x)
-            println("z: ", s.variables.z)
-            println("s: ", s.variables.s)
-        end
         @timeit s.timers "IP iteration" begin
 
         # ----------
@@ -392,8 +386,7 @@ function solver_default_start!(s::Solver{T}, warm_start::Bool,λ=0.0, prev_x=Not
         x0,s0,z0,cones0 = get_warm_start_vars(λ, s.variables, s.cones,prev_x, prev_z, prev_s)
         if check_warm_start_conditions(s.data,s.variables, s.cones, x0,s0,z0,cones0)
             printstyled("warm starting variables...\n", color = :green)
-            error("stop")
-            variables_warm_start!(variables,x0,s0,z0)
+            variables_warm_start!(s.variables,x0,s0,z0)
         end
     end
     return nothing
