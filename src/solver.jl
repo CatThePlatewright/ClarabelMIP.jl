@@ -159,7 +159,7 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, debug_print::Bool=false,  λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing
+    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, η=1000.0,debug_print::Bool=false,  λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing
 ) where{T}
 
     # initialization needed for first loop pass 
@@ -217,14 +217,8 @@ function solve!(
             # only do early_termination() if feasible upper bound available
             if ~isinf(best_ub) && early_term_enable
                 # save current iteration number as the number needed until first feasible solution found
-                if s.info.cost_dual > best_ub
-                    printstyled("info_cost_dual already larger than best ub \n", color = :red)
-                    s.info.status = EARLY_TERMINATION 
+                if early_termination(s, best_ub,η, debug_print)
                     break
-                else
-                    if early_termination(s, best_ub, debug_print)
-                        break
-                    end
                 end
             end
             isdone = info_check_termination!(s.info,s.residuals,s.settings,iter)
@@ -413,9 +407,9 @@ function get_warm_start_vars(λ, variables::DefaultVariables{T}, cones::Composit
     x0 .= λ* prev_x
     s0 .= λ* prev_s + (1-λ)*variables.s #note that variables.s etc have already been unit-initialised to C cold start point
     for i in 1:lastindex(variables.z)
-        if variables.z[i] == zero(T)
-            z0[i] =variables.z[i]
-        else 
+        if variables.z[i] == zero(T) # initializer is 0 for equality constraint
+            z0[i] = prev_z[i] #best case for z is the previous z, as s0 would be 0 
+        else #initializer is non 0 for inequality constraintss
             z0[i] = λ* prev_z[i] + (1-λ)*variables.z[i]
         end
     end

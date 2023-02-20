@@ -25,34 +25,39 @@ s.t.	Px + q + A'y + y_u - y_l == 0
 - best_ub: current best upper bound on objective value stored in root node
 - node: current node, needs to be implemented with Clarabel solver
 """
-function early_termination(solver, best_ub,debug_print=false)
+function early_termination(solver, best_ub,η,debug_print=false)
     # check κ/τ before normalization
     ktratio = solver.info.ktratio
     if ktratio <= 1e-2 # if ktratio <= 1e-2, then problem is feasible 
         data = solver.data
         variables = solver.variables
-        dual_cost = compute_dual_cost(data, variables,solver.residuals,solver.info,debug_print) #compute current dual cost
+        dual_cost = compute_dual_cost(data, variables,solver.residuals,solver.info,η,debug_print) #compute current dual cost
         if debug_print
             println("Found dual cost: ", dual_cost)
         end
         if (dual_cost > best_ub)
             printstyled("early_termination has found dual_cost larger than best ub \n", color = :red)
             solver.info.status = Clarabel.EARLY_TERMINATION
-            # TOASK or: solver.solution.status =  Clarabel.EARLY_TERMINATION
             return true
         end
     end 
     
     return false
 end
-
+function optimise_correction(data, x_k, residual_k,s_k, η)
+    v = [-residual_k; -x_k] 
+    eyemat=Matrix(1.0I, length(x_k), length(x_k)) 
+    ldltS = ldlt([Symmetric(data.P) eyemat ;
+            eyemat   -η*eyemat])
+    corr = ldltS \ v
+    return corr
+end
 """
 Dual cost computation for early termination
 """
 #new framework for dual cost computation, 
-# We can use qdldl.jl for optimization (17) later on.
 
-function compute_dual_cost(data, variables,residuals,info, debug_print=false) 
+function compute_dual_cost(data, variables,residuals,info, η,debug_print=false) 
     # info.cost_dual   =  (-residuals.dot_bz*τinv - xPx_τinvsq_over2)/cscale
     # this is (-data.b'*variables.z*τinv -0.5*xPx*τinv^2) / data.equilibration.c[]
 
@@ -69,22 +74,40 @@ function compute_dual_cost(data, variables,residuals,info, debug_print=false)
     A0 = data.A[1:end-2*m, :] 
     b0 = data.b[1:end-2*m]
     y0 = y[1:end-2*m] 
-
+    residual_k = Symmetric(data.P)*x + data.q + A0'*y0 + yplus - yminus
     Δx = zeros(length(x))
-
-    # value of residual before the correction
-    residual = Symmetric(data.P)*x + data.q + A0'*y0 + yplus - yminus
-
+    Δy = zeros(length(yplus))
+    if η != 1000.0 #this enables optimisation-based correction
+        corr = optimise_correction(data,x,residual_k, variables.s*τinv,η) # see section III.C
+        Δx .= corr[1:length(x)]
+        Δy .= corr[length(x)+1:end]
+    else # disabled optimisation based correction
     #dual correction, only for Δy = Δyplus - Δyminus
-    Δy = -residual 
-    Δyplus = max(zeros(length(Δy)),Δy) 
-    #mul!(Δx, op.P, coef*Δy) 
-    cor_x = x + Δx # for simplicity, no correction for x
+        Δy .= -residual_k
+    end
+    # value of residual before the correction
+
+    Δyplus = max.(zeros(length(Δy)),Δy) 
+    cor_x = x + Δx 
+    cor_yplus = yplus + Δyplus
+    cor_yminus = yminus + Δyplus- Δy
+    dual_cost = -0.5*cor_x'*Symmetric(data.P)*cor_x - b0'*y0 - u'*yplus - neg_l'*yminus + (-neg_l-u)'*(Δyplus) + neg_l'*Δy
 
     if debug_print
-        println("residuals ", norm(residuals.rx*τinv- residual,Inf))
+        println("residuals ", norm(residuals.rx*τinv- residual_k,Inf))
+        con1 = cor_yminus >=zeros(length(yplus)) 
+        con2 = cor_yplus >= zeros(length(yplus)) 
+        con4 = Δyplus >= zeros(length(yplus)) 
+        con5 = (Δyplus- Δy) >= zeros(length(yplus)) 
+
+        con3 = isapprox(norm(Symmetric(data.P)*cor_x + data.q + A0'*y0 + cor_yplus - cor_yminus),0.0, atol=1e-6)
+        if con1 && con2 && con3 && con4 && con5
+            printstyled("dual constraints satisfied!\n", color = :green)
+        else 
+            printstyled("error dual constraints ",con1, con2, con3,"\n", color = :red)
+            error("Stop")
+        end
     end
-    dual_cost = -0.5*cor_x'*Symmetric(data.P)*cor_x - b0'*y0 - u'*yplus - neg_l'*yminus + (-neg_l-u)'*(Δyplus) + neg_l'*Δy
     diff =  norm(dual_cost - info.cost_dual, Inf)
     if diff > 1e-6 && debug_print
         printstyled("different dual cost ", dual_cost, " ", info.cost_dual, "\n",color = :red)
@@ -95,21 +118,5 @@ function compute_dual_cost(data, variables,residuals,info, debug_print=false)
 end
 
 
-"""
-Penalized correction (ADMM paper)
-
-min 0.5*α*||Δx||^2 + 0.5*γ*||Δy||^2
-s.t.    P*Δx - Δy = -residual # NOTE: this is just my guess ?
-where   residual := Px - A'*y - y + q
-"""
-function dual_correction!(data, Δx, Δy, residual)
-    n = length(data.q)
-    #coef = γ/α
-    coef = 100
-    #solve correction matrix, correction on y^k and x^k
-    mat = coef*op.P*op.P + I
-    IterativeSolvers.cg!(Δy, mat, -residual) # this solves (P^2*coef+I)*Δy = -r (eq.18)
-    mul!(Δx, op.P, coef*Δy)
-end
 
 
