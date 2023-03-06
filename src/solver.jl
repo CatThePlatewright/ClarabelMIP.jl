@@ -159,7 +159,7 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, η=1000.0,debug_print::Bool=false,  λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing
+    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, ldltS=Nothing,debug_print::Bool=false, λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing, N=0
 ) where{T}
 
     # initialization needed for first loop pass 
@@ -215,9 +215,9 @@ function solve!(
             )
             @notimeit info_print_status(s.info,s.settings)
             # only do early_termination() if feasible upper bound available
-            if ~isinf(best_ub) && early_term_enable
+            if ~isinf(best_ub) && early_term_enable && s.info.cost_dual > best_ub
                 # save current iteration number as the number needed until first feasible solution found
-                if early_termination(s, best_ub,η, debug_print)
+                if early_termination(s, best_ub,ldltS, debug_print, N) 
                     break
                 end
             end
@@ -381,7 +381,7 @@ function solver_default_start!(s::Solver{T}, warm_start::Bool,λ=0.0, prev_x=Not
         if check_warm_start_conditions(s.data,s.variables, s.cones, x0,s0,z0,cones0)
             printstyled("warm starting variables...\n", color = :green)
             variables_warm_start!(s.variables,x0,s0,z0)
-        end
+        end 
     end
     return nothing
 end
