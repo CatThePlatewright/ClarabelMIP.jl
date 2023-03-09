@@ -159,7 +159,7 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, ldltS=Nothing,debug_print::Bool=false, λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing, N=0
+    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, ldltS::Union{SuiteSparse.CHOLMOD.Factor,Nothing}=nothing,debug_print::Bool=false, λ=0.0, prev_x=nothing, prev_z=nothing, prev_s=nothing, N::Int=0
 ) where{T}
 
     # initialization needed for first loop pass 
@@ -406,13 +406,24 @@ function get_warm_start_vars(λ, variables::DefaultVariables{T}, cones::Composit
 
     x0 .= λ* prev_x
     s0 .= λ* prev_s + (1-λ)*variables.s #note that variables.s etc have already been unit-initialised to C cold start point
-    for i in 1:lastindex(variables.z)
-        if variables.z[i] == zero(T) # initializer is 0 for equality constraint
-            z0[i] = prev_z[i] #best case for z is the previous z, as s0 would be 0 
-        else #initializer is non 0 for inequality constraintss
-            z0[i] = λ* prev_z[i] + (1-λ)*variables.z[i]
-        end
+    cone_specs = cones.cone_specs
+    println(cone_specs, length(cone_specs))
+    j = 1
+    while j <= length(z0)
+        for i in eachindex(cone_specs)
+            t = typeof(cone_specs[i])
+            k = j:j+cone_specs[i].dim-1
+            
+            if t == Clarabel.ZeroConeT
+                z0[k] .= prev_z[k]
+            else
+                z0[k] .= λ.* prev_z[k] + (1-λ).*variables.z[k]
+
+            end
+            j = j+ cone_specs[i].dim
+        end 
     end
+
     return x0,s0,z0,cones0
 end
 
