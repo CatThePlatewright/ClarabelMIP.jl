@@ -159,8 +159,30 @@ end
 Computes the solution to the problem in a `Clarabel.Solver` previously defined in [`setup!`](@ref).
 """
 function solve!(
-    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, ldltS::Union{SuiteSparse.CHOLMOD.Factor,Nothing}=nothing,debug_print::Bool=false, λ=0.0, prev_x=nothing, prev_z=nothing, prev_s=nothing, N::Int=0
+    s::Solver{T}, best_ub::T = Inf, early_term_enable::Bool=true, warm_start::Bool=false, luS::Union{SuiteSparse.UMFPACK.UmfpackLU,Nothing}=nothing,debug_print::Bool=false, λ=0.0, prev_x=nothing, prev_z=nothing, prev_s=nothing, N::Int=0
 ) where{T}
+
+    # YC: create additional memory for early termination, warm starting
+    #       without counting allocating time
+    # @notimeit begin
+        n = length(s.variables.x)
+        workx = zeros(n)
+        workrhs = zeros(2*n)
+        workcorr = zeros(2*n)
+
+        x0 = deepcopy(s.variables.x)
+        s0 = deepcopy(s.variables.s)
+        z0 = deepcopy(s.variables.z)
+
+        if isnothing(prev_x) || isnothing(prev_s) || isnothing(prev_z)
+            warm_start = false      #YC: to deal with the initial nothing setting
+        else
+            @. x0 = prev_x
+            @. s0.vec = prev_s
+            @. z0.vec = prev_z
+        end
+    # end
+
 
     # initialization needed for first loop pass 
     iter   = 0
@@ -181,7 +203,7 @@ function solve!(
     @timeit s.timers "solve!" begin
 
         # initialize variables to some reasonable starting point
-        @timeit s.timers "default start" solver_default_start!(s, warm_start,λ, prev_x, prev_z, prev_s)
+        @timeit s.timers "default start" solver_default_start!(s, warm_start,λ, x0, z0, s0)
         @timeit s.timers "IP iteration" begin
 
         # ----------
@@ -217,7 +239,8 @@ function solve!(
             # only do early_termination() if feasible upper bound available
             if ~isinf(best_ub) && early_term_enable && s.info.cost_dual > best_ub
                 # save current iteration number as the number needed until first feasible solution found
-                if early_termination(s, best_ub,ldltS, debug_print, N) 
+                if early_termination(s, best_ub,luS, debug_print, N,
+                                    workx,workrhs,workcorr) 
                     break
                 end
             end
@@ -336,7 +359,7 @@ function solve!(
 
     end #end solve! timer
     # skip post-processing steps if early_termination 
-    if s.info.status == EARLY_TERMINATION
+    if s.info.status === EARLY_TERMINATION
         return Nothing()
     end
     # Check we if actually took a final step.  If not, we need 
@@ -355,7 +378,11 @@ function solve!(
 end
 
 
-function solver_default_start!(s::Solver{T}, warm_start::Bool,λ=0.0, prev_x=Nothing, prev_z=Nothing, prev_s=Nothing) where {T}
+function solver_default_start!(s::Solver{T}, warm_start::Bool,λ::T, 
+    x0::Vector{T}, 
+    z0::ConicVector{T}, 
+    s0::ConicVector{T}
+) where {T}
 
     # If there are only symmetric cones, use CVXOPT style initilization
     # Otherwise, initialize along central rays
@@ -377,57 +404,57 @@ function solver_default_start!(s::Solver{T}, warm_start::Bool,λ=0.0, prev_x=Not
     variables_unit_initialization!(s.variables, s.cones)
 
     if warm_start
-        x0,s0,z0,cones0 = get_warm_start_vars(λ, s.variables, s.cones,prev_x, prev_z, prev_s)
-        if check_warm_start_conditions(s.data,s.variables, s.cones, x0,s0,z0,cones0)
-            printstyled("warm starting variables...\n", color = :green)
+        get_warm_start_vars(λ, s.variables, s.cones,x0, z0, s0)
+        if check_warm_start_conditions(s.data,s.variables, s.cones, x0,s0,z0)
+            # printstyled("warm starting variables...\n", color = :green)
             variables_warm_start!(s.variables,x0,s0,z0)
         end 
     end
     return nothing
 end
 
-function check_warm_start_conditions(data::DefaultProblemData{T},variables::DefaultVariables{T}, cones::CompositeCone{T}, x0,s0,z0, cones0::CompositeCone{T})
+function check_warm_start_conditions(data::DefaultProblemData{T},variables::DefaultVariables{T}, 
+    cones::CompositeCone{T}, 
+    x0::Vector{T},
+    s0::ConicVector{T},
+    z0::ConicVector{T}
+) where {T}
     
     rp_C = -data.A'* variables.z - Symmetric(data.P)*variables.x - data.q * variables.τ
     rp0 = -data.A'* z0 - Symmetric(data.P)*x0 - data.q 
     rd0 = data.A * x0 + s0 - data.b 
     rd_C = data.A * variables.x + variables.s - data.b * variables.τ
-    mu0 = (dot(s0,z0) + one(T))/(cones0.degree +1)
+    mu0 = (dot(s0,z0) + one(T))/(cones.degree +1)
     mu_C = (dot(variables.s,variables.z) + one(T))/(cones.degree +1)
 
     return (norm(rd0) < norm(rd_C)) && (norm(rp0) < norm(rp_C)) && (mu0 < mu_C)
 end
 
-function get_warm_start_vars(λ, variables::DefaultVariables{T}, cones::CompositeCone{T},prev_x, prev_z, prev_s)
-    cones0 = deepcopy(cones)
-    z0 = zeros(length(variables.z))
-    s0 = zeros(length(variables.s))
-    x0 = zeros(length(variables.x))
+function get_warm_start_vars(λ, variables::DefaultVariables{T}, cones::CompositeCone{T},
+    x0::Vector{T}, 
+    z0::ConicVector{T}, 
+    s0::ConicVector{T}
+) where {T}
+    #YC: We can use memory of prev_... directly for warm-start
+    
+    s = variables.s
 
-    x0 .= λ* prev_x
-    s0 .= λ* prev_s + (1-λ)*variables.s #note that variables.s etc have already been unit-initialised to C cold start point
-    cone_specs = cones.cone_specs
-    println(cone_specs, length(cone_specs))
-    j = 1
-    while j <= length(z0)
-        for i in eachindex(cone_specs)
-            t = typeof(cone_specs[i])
-            k = j:j+cone_specs[i].dim-1
-            
-            if t == Clarabel.ZeroConeT
-                z0[k] .= prev_z[k]
-            else
-                z0[k] .= λ.* prev_z[k] + (1-λ).*variables.z[k]
+    @. x0 *= λ
+    @. s0= λ* s0 + (1-λ)*s #note that variables.s etc have already been unit-initialised to C cold start point
 
-            end
-            j = j+ cone_specs[i].dim
-        end 
-    end
+    for (cone,zi,z0i) in zip(cones,variables.z.views,z0.views)
+        if !(typeof(cone) == Clarabel.ZeroConeT)
+            @. z0i = λ* z0i + (1-λ)*zi
+        end
+    end 
 
-    return x0,s0,z0,cones0
 end
 
-function variables_warm_start!(variables::DefaultVariables{T}, x0,s0,z0)
+function variables_warm_start!(variables::DefaultVariables{T}, 
+    x0::Vector{T},
+    s0::ConicVector{T},
+    z0::ConicVector{T}
+) where {T}
  # this is the (Wpd) warm start point in Skajaa's paper (eq 9)
     variables.x .= x0
     variables.s .= s0
